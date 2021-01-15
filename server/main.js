@@ -1,8 +1,16 @@
 //setup libraries
+const { resolve } = require('path');
+
 require('dotenv').config()
 const express = require('express')
 const expressWS = require('express-ws')
 const mysql = require('mysql2/promise')
+const fs = require('fs')
+const jwt = require('jsonwebtoken')
+
+//setup passport
+const passport = require('passport')
+const LocalStrategy = require('passport-local').Strategy
 
 const sha1 = require('sha1')
 const cors = require('cors')
@@ -21,20 +29,15 @@ const aws = require('aws-sdk'),
 // 	}
 // })
 
-//multer configuration
-const upload = multer({
-	dest: process.env.TMP_DIR || "/tmp"
-  });
-
 const app = express()
 const appWS = expressWS(app)
+const TOKEN_SECRET = process.env.TOKEN_SECRET
 
 //server configuration setup
 const PORT = parseInt(process.argv[2]) || parseInt(process.env.APP_PORT) || 3000
 //app.use(express.urlencoded({ extended: true }));
 //app.use(express.json());
-app.use(bodyparser.urlencoded({limit: '50mb', extended: true}))
-app.use(bodyparser.json({limit: '50mb'}))
+
 app.use(morgan('combined'))
 app.use(cors())
 //--end of server configuration setup
@@ -49,6 +52,7 @@ const pool = mysql.createPool({
 	connectionLimit: process.env.MYSQL_CON_LIMIT
 });
 const isValidUserSQL = 'SELECT COUNT(*) as "match" from player where player_id = ? AND password = ?';
+const userLoginSQL = 'SELECT * from player where player_id = ? and password = ?';
 const insertUserSQL = 'INSERT into player(player_id, password) values(?, ?)';
 const insertPlayerStatsSQL = 'INSERT into playerStats(player_id, player_hits, player_misses, player_shots) values(?, ?, ?, ?)';
 const selectTopPlayersSQL = 'SELECT * from playerStats order by player_hits desc';
@@ -130,6 +134,11 @@ const getObject = (keyFilename, s3) => new Promise(
 	}
 )
 
+//multer configuration
+const upload = multer({
+	dest: process.env.TMP_DIR || "/tmp"
+  });
+
 // const upload = multer({
 //     storage: multerS3({
 //         s3: s3,
@@ -149,6 +158,7 @@ const getObject = (keyFilename, s3) => new Promise(
 //     })
 // }).single('upload');
 
+
 async function downloadFromS3(params, res) {
     const metaData = await s3.headObject(params).promise();
     console.log("metadata");
@@ -164,6 +174,72 @@ async function downloadFromS3(params, res) {
 };
 //--end of AWS configuration setup
 
+//configure Passport with localStrategy
+passport.use(
+	new LocalStrategy(
+		{
+			usernameField: "player_id",
+			passwordField: "password"
+		},
+		(player_id, password, done) => {
+			console.info(`>>>passport received user:${player_id} and password:${password}`);
+			mkSQLQuery(isValidUserSQL, pool)([player_id, password])
+			.then(returnedPlayer=>{
+				if(!returnedPlayer) {
+					console.info(`player not found`);
+					return done(null, false, {status:"401", message: "Invalid Login"});
+				}
+				else {
+					console.info(`player found in SQL:`, player_id);
+					return done(null, 
+						{
+							player_id: player_id,
+							loginTime: (new Date()).toString(),
+							security: 2
+						});
+				}
+			})
+			// .catch(err=>{
+			// 	// res.status(500);
+			// 	// res.json(err);
+			// 	console.info("err capture in mkSQLQuery");
+			// 	return done(null, false, {status:"500", err});
+			// })
+		}
+
+	)
+)
+//--end of configure Passport
+
+//configure bodyparser
+app.use(bodyparser.urlencoded({limit: '50mb', extended: true}))
+app.use(bodyparser.json({limit: '50mb'}))
+//--end of bodyparser config
+//initialize passport
+app.use(passport.initialize())
+
+//passport functions
+const makeAuth = (newPassport) => {
+    return (req, res, next) => {
+        newPassport.authenticate('local', {session: false},
+            (err, user, info) => {
+				console.info(user);
+				console.info(err);
+                if((err != null) || !user) {
+					console.info(`makeAuth error`);
+                    res.status(401).contentType('application/json').json({ error: err });
+                    return;
+				}
+				console.info(`>>>makeAuth pass in player:`, player_id);
+                req.player_id = player_id;
+                next();
+            }
+        )(req, res, next);
+    }
+}
+const localStrategyAuth = makeAuth(passport);
+//--end of passport functions
+
 //Phaser game objects
 const players = []
 isGameOver = false;
@@ -172,38 +248,29 @@ hasGameToken = ''; //hold playerId to compare for turn to move
 //--end of phaser game objects
 
 //Express servers calls - login and signup
-app.post('/login', (req,res)=> {
+app.post('/login', localStrategyAuth, (req,res) =>{
 	//console.info(req.body);
 	let player_id = req.body.player_id;
 	let password = req.body.password;
-	//console.info("playerid: ", player_id)
-	//console.info("password: ", password)
-	//sha1(req.body.password);
-	//console.info(req.body.password);
-	mkSQLQuery(isValidUserSQL, pool)([player_id, password])
-	.then(result=>{
-		console.info(result);
-		if(result[0]['match'] !== 0) {
-			console.info("200");
-			res.type('application/json');
-			res.status(200);
-			//res.json(result);
-			res.json({status:"200",message:"login success", 
-			player_id: player_id, password: password});
-		}
-		else {
-			console.info("401");
-			res.status(401);
-			res.json({status:"401",message:"authentication failed"});
-		}
-	})
-	.catch(err=>{
-		res.status(500);
-		res.json(err);
-	})
+	//res.json(req.player_id);
+	const currTime = (new Date()).getTime();
+	const token = jwt.sign({
+		sub: req.player_id,
+		iss: 'snmfApp',
+		iat: currTime / 1000,
+		exp: (currTime / 1000) + 3600,
+		data: { loginTime: req.player_id.loginTime }
+	}, TOKEN_SECRET);
+	
+	res.status(200)
+	.contentType('application/json')
+	.json({
+		message: `Login at ${new Date()}`,
+		token: token
+	});
 })
 
-app.post('/signUp', (req,res)=>{
+app.post('/signUp', upload.single('image'),(req,res)=>{
 	console.info(req.body);
 	let player_id = req.body.player_id;
 	let password = req.body.password;
@@ -212,56 +279,44 @@ app.post('/signUp', (req,res)=>{
 	readFile(req.file.path)
 		.then(buff => {
 			//console.log(buff);
-			putObject(req.file, buff, s3);
+			putObject(req.file, buff, s3)
+			.then(result=> {
+				console.info(result);
+			});
 		})
 		.then(
 			result => {
-				mkSQLQuery(insertUserSQL, pool)([player_id, password]);
+				console.info("upload img ok");
+				console.info(result);
+				mkSQLQuery(insertUserSQL, pool)([player_id, password])
+				.then(
+					result=>{
+						console.info(result.serverStatus);
+						if(result.serverStatus === 2) {
+							// console.info("200");
+							// res.type('application/json');
+							res.status(200);
+							res.json({message:"Register success!"});
+							// res.json({status:"200",message:"login success", 
+							// player_id: player_id, password: password});
+						}
+						else {
+							console.info("401");
+							res.status(401);
+							res.json({status:"401",message:"sign up failed"});
+						}
+				})
+				.catch(err=>{
+					res.status(500);
+					res.json({message:"Duplicate ID!"});
+				});
 			}
 		)
-		.then(
-			result=>{
-				console.info(result.serverStatus);
-				if(result.serverStatus === 2) {
-					// console.info("200");
-					// res.type('application/json');
-					res.status(200);
-					res.json({message:"Register success!"});
-					// res.json({status:"200",message:"login success", 
-					// player_id: player_id, password: password});
-				}
-				else {
-					console.info("401");
-					res.status(401);
-					res.json({status:"401",message:"sign up failed"});
-				}
-		})
-		.catch(err=>{
+		.catch(err=> {
 			res.status(500);
-			res.json({message:"Duplicate ID!"});
-		})
-		
-	// mkSQLQuery(insertUserSQL, pool)([player_id, password])
-	// .then(result=>{
-	// 	console.info(result.serverStatus);
-	// 	if(result.serverStatus === 2) {
-	// 		// console.info("200");
-	// 		// res.type('application/json');
-	// 		res.status(200);
-	// 		res.json({message:"Register success!"});
-	// 		// res.json({status:"200",message:"login success", 
-	// 		// player_id: player_id, password: password});
-	// 	}
-	// 	else {
-	// 		console.info("401");
-	// 		res.status(401);
-	// 		res.json({status:"401",message:"sign up failed"});
-	// 	}
-	// })
-	// .catch(err=>{
-	// 	res.status(500);
-	// 	res.json({message:"Duplicate ID!"});
-	// })
+			res.json({message:"Upload image failed!"});
+		});
+
 })
 //--end of express server calls for login/signup
 

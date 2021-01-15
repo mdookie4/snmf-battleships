@@ -14,13 +14,15 @@ const appRoutes: Routes = [
   { path: 'signUp', component: SignUpComponent},
   {
     path: 'play', component: PlayComponent,
-    //canActivate: [AuthService]
+    canActivate: [AuthService],
     data: {},
     runGuardsAndResolvers: 'always'
   },
   {
-    path: 'rankings', component: RankingsComponent
-    //canActivate: [AuthService]
+    path: 'rankings', component: RankingsComponent,
+    canActivate: [AuthService],
+    data: {},
+    runGuardsAndResolvers: 'always'
   },
   { path:'**', redirectTo: '/', pathMatch: 'full'},
 ];

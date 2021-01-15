@@ -1,16 +1,8 @@
 //setup libraries
-const { resolve } = require('path');
-
 require('dotenv').config()
 const express = require('express')
 const expressWS = require('express-ws')
 const mysql = require('mysql2/promise')
-const fs = require('fs')
-const jwt = require('jsonwebtoken')
-
-//setup passport
-const passport = require('passport')
-const LocalStrategy = require('passport-local').Strategy
 
 const sha1 = require('sha1')
 const cors = require('cors')
@@ -29,15 +21,20 @@ const aws = require('aws-sdk'),
 // 	}
 // })
 
+//multer configuration
+const upload = multer({
+	dest: process.env.TMP_DIR || "/tmp"
+  });
+
 const app = express()
 const appWS = expressWS(app)
-const TOKEN_SECRET = process.env.TOKEN_SECRET
 
 //server configuration setup
 const PORT = parseInt(process.argv[2]) || parseInt(process.env.APP_PORT) || 3000
 //app.use(express.urlencoded({ extended: true }));
 //app.use(express.json());
-
+app.use(bodyparser.urlencoded({limit: '50mb', extended: true}))
+app.use(bodyparser.json({limit: '50mb'}))
 app.use(morgan('combined'))
 app.use(cors())
 //--end of server configuration setup
@@ -52,7 +49,6 @@ const pool = mysql.createPool({
 	connectionLimit: process.env.MYSQL_CON_LIMIT
 });
 const isValidUserSQL = 'SELECT COUNT(*) as "match" from player where player_id = ? AND password = ?';
-const userLoginSQL = 'SELECT * from player where player_id = ? and password = ?';
 const insertUserSQL = 'INSERT into player(player_id, password) values(?, ?)';
 const insertPlayerStatsSQL = 'INSERT into playerStats(player_id, player_hits, player_misses, player_shots) values(?, ?, ?, ?)';
 const selectTopPlayersSQL = 'SELECT * from playerStats order by player_hits desc';
@@ -134,11 +130,6 @@ const getObject = (keyFilename, s3) => new Promise(
 	}
 )
 
-//multer configuration
-const upload = multer({
-	dest: process.env.TMP_DIR || "/tmp"
-  });
-
 // const upload = multer({
 //     storage: multerS3({
 //         s3: s3,
@@ -158,7 +149,6 @@ const upload = multer({
 //     })
 // }).single('upload');
 
-
 async function downloadFromS3(params, res) {
     const metaData = await s3.headObject(params).promise();
     console.log("metadata");
@@ -174,72 +164,6 @@ async function downloadFromS3(params, res) {
 };
 //--end of AWS configuration setup
 
-//configure Passport with localStrategy
-passport.use(
-	new LocalStrategy(
-		{
-			usernameField: "player_id",
-			passwordField: "password"
-		},
-		(player_id, password, done) => {
-			console.info(`>>>passport received user:${player_id} and password:${password}`);
-			mkSQLQuery(isValidUserSQL, pool)([player_id, password])
-			.then(returnedPlayer=>{
-				if(!returnedPlayer) {
-					console.info(`player not found`);
-					return done(null, false, {status:"401", message: "Invalid Login"});
-				}
-				else {
-					console.info(`player found in SQL:`, player_id);
-					return done(null, 
-						{
-							player_id: player_id,
-							loginTime: (new Date()).toString(),
-							security: 2
-						});
-				}
-			})
-			// .catch(err=>{
-			// 	// res.status(500);
-			// 	// res.json(err);
-			// 	console.info("err capture in mkSQLQuery");
-			// 	return done(null, false, {status:"500", err});
-			// })
-		}
-
-	)
-)
-//--end of configure Passport
-
-//configure bodyparser
-app.use(bodyparser.urlencoded({limit: '50mb', extended: true}))
-app.use(bodyparser.json({limit: '50mb'}))
-//--end of bodyparser config
-//initialize passport
-app.use(passport.initialize())
-
-//passport functions
-const makeAuth = (newPassport) => {
-    return (req, res, next) => {
-        newPassport.authenticate('local', {session: false},
-            (err, user, info) => {
-				console.info(user);
-				console.info(err);
-                if((err != null) || !user) {
-					console.info(`makeAuth error`);
-                    res.status(401).contentType('application/json').json({ error: err });
-                    return;
-				}
-				console.info(`>>>makeAuth pass in player:`, player_id);
-                req.player_id = player_id;
-                next();
-            }
-        )(req, res, next);
-    }
-}
-const localStrategyAuth = makeAuth(passport);
-//--end of passport functions
-
 //Phaser game objects
 const players = []
 isGameOver = false;
@@ -248,29 +172,38 @@ hasGameToken = ''; //hold playerId to compare for turn to move
 //--end of phaser game objects
 
 //Express servers calls - login and signup
-app.post('/login', localStrategyAuth, (req,res) =>{
+app.post('/login', (req,res)=> {
 	//console.info(req.body);
 	let player_id = req.body.player_id;
 	let password = req.body.password;
-	//res.json(req.player_id);
-	const currTime = (new Date()).getTime();
-	const token = jwt.sign({
-		sub: req.player_id,
-		iss: 'snmfApp',
-		iat: currTime / 1000,
-		exp: (currTime / 1000) + 3600,
-		data: { loginTime: req.player_id.loginTime }
-	}, TOKEN_SECRET);
-	
-	res.status(200)
-	.contentType('application/json')
-	.json({
-		message: `Login at ${new Date()}`,
-		token: token
-	});
+	//console.info("playerid: ", player_id)
+	//console.info("password: ", password)
+	//sha1(req.body.password);
+	//console.info(req.body.password);
+	mkSQLQuery(isValidUserSQL, pool)([player_id, password])
+	.then(result=>{
+		console.info(result);
+		if(result[0]['match'] !== 0) {
+			console.info("200");
+			res.type('application/json');
+			res.status(200);
+			//res.json(result);
+			res.json({status:"200",message:"login success", 
+			player_id: player_id, password: password});
+		}
+		else {
+			console.info("401");
+			res.status(401);
+			res.json({status:"401",message:"authentication failed"});
+		}
+	})
+	.catch(err=>{
+		res.status(500);
+		res.json(err);
+	})
 })
 
-app.post('/signUp', upload.single('image'),(req,res)=>{
+app.post('/signUp', (req,res)=>{
 	console.info(req.body);
 	let player_id = req.body.player_id;
 	let password = req.body.password;
@@ -279,44 +212,34 @@ app.post('/signUp', upload.single('image'),(req,res)=>{
 	readFile(req.file.path)
 		.then(buff => {
 			//console.log(buff);
-			putObject(req.file, buff, s3)
-			.then(result=> {
-				console.info(result);
-			});
+			putObject(req.file, buff, s3);
 		})
 		.then(
 			result => {
-				console.info("upload img ok");
-				console.info(result);
-				mkSQLQuery(insertUserSQL, pool)([player_id, password])
-				.then(
-					result=>{
-						console.info(result.serverStatus);
-						if(result.serverStatus === 2) {
-							// console.info("200");
-							// res.type('application/json');
-							res.status(200);
-							res.json({message:"Register success!"});
-							// res.json({status:"200",message:"login success", 
-							// player_id: player_id, password: password});
-						}
-						else {
-							console.info("401");
-							res.status(401);
-							res.json({status:"401",message:"sign up failed"});
-						}
-				})
-				.catch(err=>{
-					res.status(500);
-					res.json({message:"Duplicate ID!"});
-				});
+				mkSQLQuery(insertUserSQL, pool)([player_id, password]);
 			}
 		)
-		.catch(err=> {
+		.then(
+			result=>{
+				console.info(result.serverStatus);
+				if(result.serverStatus === 2) {
+					// console.info("200");
+					// res.type('application/json');
+					res.status(200);
+					res.json({message:"Register success!"});
+					// res.json({status:"200",message:"login success", 
+					// player_id: player_id, password: password});
+				}
+				else {
+					console.info("401");
+					res.status(401);
+					res.json({status:"401",message:"sign up failed"});
+				}
+		})
+		.catch(err=>{
 			res.status(500);
-			res.json({message:"Upload image failed!"});
-		});
-
+			res.json({message:"Duplicate ID!"});
+		})
 })
 //--end of express server calls for login/signup
 
@@ -363,27 +286,36 @@ const processMessage = (payload) => {
 			playerId = msg.player;
 			const ship1X = msg.ship1X;
 			const ship1Y = msg.ship1Y;
+			const ship2X = msg.ship2X;
+      const ship2Y = msg.ship2Y;
+      const ship3X = msg.ship3X;
+			const ship3Y = msg.ship3Y;
 			var playerIdx = players.findIndex(p=> p.playerId == playerId)
 			players[playerIdx].isPlayerReady = true;
 			players[playerIdx].ship1X = ship1X;
 			players[playerIdx].ship1Y = ship1Y;
+			players[playerIdx].ship2X = ship2X;
+      players[playerIdx].ship2Y = ship2Y;
+      players[playerIdx].ship3X = ship3X;
+			players[playerIdx].ship3Y = ship3Y;
 			//console.info('player-length:',players.length);
 			for (let idx = 0; idx < players.length; idx++) {
 				if(!(players.length > 1)) {
 					console.info("all players ready:", isAllPlayersReady = false);
-					resp = { type: 'wait-for-players' };//, message: 'Waiting for players...' };
+					resp = { type: 'wait-for-players' };
 					players[playerIdx].ws.send(JSON.stringify(resp));
 					break;
 				}
 				else if(!players[idx].isPlayerReady) {
 					console.info("all players ready:", isAllPlayersReady = false);
-					resp = { type: 'wait-for-players' };//, message: 'Waiting for players...' };
+					resp = { type: 'wait-for-players' };
 					players[playerIdx].ws.send(JSON.stringify(resp));
 					break;
 				}
 			}
 			if(isAllPlayersReady) {
-				isGameStarted = true;
+        this.isGameStarted = true;
+        this.isGameOver = false;
 				resp = { type: 'all-players-ready' };
 				for (let p in players) {
 					players[p].ws.send(JSON.stringify(resp));
@@ -432,7 +364,23 @@ const processMessage = (payload) => {
 							resp = { type: 'enemy-ship-sinked', sinkLoc: bombLoc[j] };
 							players[playerIdx].ws.send(JSON.stringify(resp));
 							//end game if all ships hit (here we check only one ship)
-						}
+            } 
+            else if (bombLoc[j].x == players[i].ship2X && bombLoc[j].y == players[i].ship2Y) {
+              players[i].ship2Sink = true;
+							console.info(players[i].playerId + " ship sank");
+							resp = { type: 'self-ship-sinked', sinkLoc: bombLoc[j] };
+							players[i].ws.send(JSON.stringify(resp));
+							resp = { type: 'enemy-ship-sinked', sinkLoc: bombLoc[j] };
+							players[playerIdx].ws.send(JSON.stringify(resp));
+            }
+            else if (bombLoc[j].x == players[i].ship3X && bombLoc[j].y == players[i].ship3Y) {
+              players[i].ship3Sink = true;
+							console.info(players[i].playerId + " ship sank");
+							resp = { type: 'self-ship-sinked', sinkLoc: bombLoc[j] };
+							players[i].ws.send(JSON.stringify(resp));
+							resp = { type: 'enemy-ship-sinked', sinkLoc: bombLoc[j] };
+							players[playerIdx].ws.send(JSON.stringify(resp));
+            }
 						else {
 							console.info("server - shot missed");
 							resp = { type: 'shot-missed' };
@@ -441,7 +389,7 @@ const processMessage = (payload) => {
 					}
 				}	
 				//check game over conditions
-				if(players[i].ship1Sink) {
+				if(players[i].ship1Sink && players[i].ship2Sink && players[i].ship3Sink) {
 					this.isGameOver = true;
 					resp = { type: 'victory-game-over'};
 					players[playerIdx].ws.send(JSON.stringify(resp));
@@ -461,7 +409,7 @@ const processMessage = (payload) => {
 						resp = { type: 'player-turn' };
 						players[x].ws.send(JSON.stringify(resp));
 					}
-				}
+        }
 			}
 			break;
 		
@@ -489,7 +437,11 @@ app.ws('/play/:playerId', (ws,req)=> {
 		ship1X: 0,
 		ship1Y: 0,
 		ship2Sink: false, 
+		ship2X: 0,
+		ship2Y: 0,
 		ship3Sink: false,
+		ship3X: 0,
+		ship3Y: 0,
 		isPlayerReady: false,
 		hasMove: false,
 		ws
