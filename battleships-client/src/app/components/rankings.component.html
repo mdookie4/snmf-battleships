@@ -1,0 +1,48 @@
+<div class="row">
+	<div class="col-md-6 col-md-offset-3 col-xs-6 col-xs-offset-3 text-center">
+		<h2><code>Top Players</code></h2>
+	</div>
+</div>
+
+<div class="row">
+	<div class="col-md-10 col-md-offset-1 col-xs-10 col-xs-offset-1">
+    <div class="row">
+      <div class="col-md-4 col-xs-4 text-center"><h4>Player</h4></div>
+      <div class="col-md-2 col-xs-2 text-center"><h4>Hits</h4></div>
+      <div class="col-md-2 col-xs-2 text-center"><h4>Misses</h4></div>
+      <div class="col-md-2 col-xs-2 text-center"><h4>Shots</h4></div>
+    </div>
+    <div class="alert alert-danger" *ngIf="error">
+      <p>{{ error }}</p>
+    </div>
+		<div class="list-group">
+		  <a *ngFor="let p of rankingResults"
+				  class="list-group-item list-group-item-info">
+			  <div class="row">
+				  <div class="col-md-4 col-xs-4 text-center">
+					  <span> {{ p.playerId }} </span>
+				  </div>
+				  <div class="col-md-2 col-xs-2 text-center">
+					  <span> {{ p.playerHits }} </span>
+          </div>
+          <div class="col-md-2 col-xs-2 text-center">
+					  <span> {{ p.playerMisses }} </span>
+          </div>
+          <div class="col-md-2 col-xs-2 text-center">
+					  <span> {{ p.playerShots }} </span>
+				  </div>
+			  </div>
+		  </a>
+		</div>
+	</div>
+</div>
+
+<div class="row">
+	<div class="col-md-6 col-md-offset-3 col-xs-6 col-xs-offset-3 text-center">
+    <button class="btn" type="button" [routerLink]="['']">
+      Back to Main
+    </button>
+	</div>
+</div>
+<hr>
+

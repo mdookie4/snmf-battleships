@@ -1,0 +1,31 @@
+<div class="row">
+  <div class="col-md-6 col-md-offset-3">
+      <img class="img-responsive" src="https://assets.nintendo.com/image/upload/f_auto,q_auto,w_960,h_540/Legacy%20Videos/posters/R1a2syaTE6xJgyksrCT7ajeyn6shCGJF.jpg" alt="">
+  </div>
+</div>
+<div class="row">
+  <form [formGroup]="signUpForm">
+  <div class="col-md-3 col-md-offset-3 text-center">
+    <img class="border img-thumbnail" [src]="imagePath" alt="">
+    <input type="file" class="form-control" formControlName="avatarImg" (change)="handleFileInput($event.target.files)">
+    <!-- #imagefile> -->
+  </div>
+  <div class="col-md-4">
+    <div class="alert alert-danger" *ngIf="error">
+      <p>{{ error }}</p>
+    </div>
+    <div class="form-group">
+      <label for="playerID">ID</label>
+      <input type="text" class="form-control" formControlName="playerID" required>
+    </div>
+    <div class="form-group">
+      <label for="password">Password</label>
+      <input type="password" class="form-control" formControlName="password" required>
+    </div>
+    <hr>
+    <div class="text-right">
+      <button class="btn" type="button" (click)="onRegister()" [disabled]="!signUpForm.valid">Register</button>
+    </div>
+  </div>
+   </form>
+</div>
